@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  InputVideoBucketName:
+    Type: String
+  OutputVideoBucketName:
+    Type: String
+  BatchMaximumvCPU:
+    Type: String
+    Default: 256
+  Vpc:
+    Type: AWS::EC2::VPC::Id
+    Description: 'List of Subnets'
+  SubnetPrivateIDs:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'List of Subnets'
+  Environment:
+    Type: String
+    Description: 'Environment Name'
+    Default: Dev
+  BatchContainerImage:
+    Type: String
+  Gpus:
+    Type: String
+    Description: Number of GPUs per Job
+  ContainerMemory:
+    Type: String
+    Default: 1024
+  Vcpus:
+    Type: String
+    Default: 1
+
+Resources:
+  InputS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      BucketName: !Ref InputVideoBucketName
+      AccessControl: Private
+  OutputS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref OutputVideoBucketName
+      AccessControl: Private
+  ComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      ServiceRole: !Ref BatchServiceRole
+      ComputeEnvironmentName: !Join [ "", [ "Batch-", !Ref Environment ] ]
+      ComputeResources:
+        InstanceTypes: 
+          - optimal
+        MaxvCpus: !Ref BatchMaximumvCPU
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        Type: EC2
+        Subnets: !Ref SubnetPrivateIDs
+        InstanceRole: !Ref BatchInstanceProfile
+        MinvCpus: 0
+        DesiredvCpus: 0
+      State: ENABLED
+  JobDefinition:
+    Type: "AWS::Batch::JobDefinition"
+    Properties:
+      Type: Container
+      ContainerProperties:
+        Environment:
+          - Name: S3_OUTPUT
+            Value: !Join [ "", [ "s3://", !Ref OutputS3Bucket] ]
+        Command:
+          - "/opt/anonymizer_wrapper.sh"
+          - "Ref::S3bucket"
+          - "Ref::S3key"
+        Memory: !Ref ContainerMemory
+        JobRoleArn: !Ref BatchContainerIAMRole
+        Vcpus: !Ref Vcpus
+        Image: !Ref BatchContainerImage
+      JobDefinitionName: batch_object_copy
+      RetryStrategy:
+        Attempts: 3
+  BatchQueue:
+    Type: "AWS::Batch::JobQueue"
+    Properties:
+      ComputeEnvironmentOrder:
+        - ComputeEnvironment: !Ref ComputeEnvironment
+          Order: 1
+      Priority: 1
+      State: "ENABLED"
+      JobQueueName: !Join [ "", ["queueName-", !Ref Environment]]
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+  BatchContainerIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ecs-tasks.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'SubmitBatch'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: 'Allow'
+                Action:
+                  - 'batch:SubmitJob'
+                Resource: '*'
+        - PolicyName: 'S3_Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 's3:*'
+                Resource: [
+                  !Join [ '', ['arn:aws:s3:::', !Ref InputS3Bucket,"/*" ]],
+                  !Join [ '', ['arn:aws:s3:::', !Ref InputS3Bucket]],
+                  !Join [ '', ['arn:aws:s3:::', !Ref OutputS3Bucket,"/*" ]],
+                  !Join [ '', ['arn:aws:s3:::', !Ref OutputS3Bucket]],
+                ]
+  EventBridgeIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'events.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        -
+          PolicyName: 'SubmitBatch'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: 'Allow'
+                Action:
+                  - 'batch:SubmitJob'
+                Resource: '*'
+  BatchServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'batch.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole'
+  BatchInstanceIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role'
+  BatchInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /
+      Roles:
+        - !Ref BatchInstanceIAMRole
+      InstanceProfileName: !Join [ "", [ "BatchIAM", !Ref Environment ] ]
+  AmazonCloudWatchEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - 'AWS API Call via CloudTrail'
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - CopyObject
+            - PutObject
+            - CompleteMultipartUpload
+          requestParameters:
+            bucketName:
+              - !Ref InputS3Bucket
+
+      Targets:
+        - Arn:
+            !Ref BatchQueue
+          RoleArn: !GetAtt
+            - EventBridgeIAMRole
+            - Arn
+          Id: Id121
+          BatchParameters:
+            JobDefinition: !Ref JobDefinition
+            JobName: Batch-Demo
+          InputTransformer:
+            InputPathsMap:
+              "S3BucketValue" : "$.detail.requestParameters.bucketName"
+              "S3KeyValue" : "$.detail.requestParameters.key"
+            InputTemplate: |
+              {"Parameters" :
+                {
+                  "S3bucket": <S3BucketValue>,
+                  "S3key": <S3KeyValue>
+                }
+              }
+
+Outputs:
+  InputS3Bucket:
+    Value: !Ref InputS3Bucket
+    Description: Name of the Amazon S3 bucket with a notification configuration.
+  OutputS3Bucket:
+    Value: !Ref OutputS3Bucket
+    Description: Name of the Amazon S3 bucket with a notification configuration.
