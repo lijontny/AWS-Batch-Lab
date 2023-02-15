@@ -4,6 +4,7 @@
 ### 2. Docker Image
 - Build Docker Image in C9
 ```shell
+git clone git@github.com:lijontny/AWS-Batch-Lab.git
 cd /docker
 docker build -t image-copier .
 ```
