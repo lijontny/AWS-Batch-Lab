@@ -29,8 +29,8 @@ BatchMaximumvCPU: 256 <br />
 ContainerMemory: 1024 <br />
 Environment: Dev <br />
 Gpus: 0 <br />
-InputVideoBucketName: Input bucket name (Example: Aptiv-input-batch-$yourname) <br />
-OutputVideoBucketName: output bucket name (Example: Aptiv-output-batch-$yourname) <br />
+InputVideoBucketName: Input bucket name (Example: aptiv-input-batch-$yourname) <br />
+OutputVideoBucketName: output bucket name (Example: aptiv-output-batch-$yourname) <br />
 SubnetPrivateIDs: Choose from the list default subnets <br />
 Vcpus: 1 <br />
 Vpc: Select default VPC <br />
